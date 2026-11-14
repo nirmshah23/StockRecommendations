@@ -20,6 +20,7 @@ from bs4 import BeautifulSoup  # pip install beautifulsoup4
 import numpy as np
 import pandas as pd
 import requests
+from dotenv import load_dotenv
 from company_news import collect_company_news, log_company_news
 
 # set the working directory to the executable's location
@@ -298,6 +299,7 @@ def update_tradebook(tradebook_path="tradebook.csv", new_trades_path="new_trades
 
 
 def main(news_only=False):
+    load_dotenv(Path(__file__).resolve().with_name(".env"), override=True)
     setup_logging()
     logging.info("Starting trade recommendations run.")
 
@@ -318,7 +320,7 @@ def main(news_only=False):
     app_password = os.environ.get("SMTP_APP_PASSWORD", "")
     receiver_email = os.environ.get("SMTP_RECEIVER_EMAIL", sender_email)
     if not news_only and not all((sender_email, app_password, receiver_email)):
-        raise ValueError("Set SMTP_SENDER_EMAIL, SMTP_APP_PASSWORD, and optionally SMTP_RECEIVER_EMAIL.")
+        raise ValueError("Set SMTP_SENDER_EMAIL and SMTP_APP_PASSWORD in .env (SMTP_RECEIVER_EMAIL is optional).")
 
     if not os.path.exists("tradebook.csv"):
         raise FileNotFoundError("tradebook.csv not found.")

@@ -7,17 +7,20 @@ and generated reports are excluded from Git. Supply your own `tradebook.csv`,
 `mapping.csv`, `rsi_data.csv`, and Netscape-format `cookies.txt` using the input
 columns documented below. The RSI cache must contain data from a previous run.
 
-Before sending email, set these environment variables in PowerShell:
+Before sending email, copy `.env.example` to `.env` beside
+`trade_recommendations.py` and fill in your settings once:
 
-```powershell
-$env:SMTP_SENDER_EMAIL = "you@example.com"
-$env:SMTP_APP_PASSWORD = "your-google-app-password"
-$env:SMTP_RECEIVER_EMAIL = "you@example.com"
+```dotenv
+SMTP_SENDER_EMAIL=you@gmail.com
+SMTP_APP_PASSWORD=your-google-app-password
+SMTP_RECEIVER_EMAIL=recipient@example.com
 ```
 
-The receiver defaults to the sender when omitted. `.env.example` documents the
-settings; the application does not automatically load `.env` files. Email
-credentials are optional for `--news-only`.
+Use a Google app password. The receiver defaults to the sender when omitted.
+The application automatically loads this file on every run, including runs via
+the batch file or Task Scheduler. Values in `.env` take precedence over existing
+environment variables. The file contains credentials and is excluded from Git.
+Email credentials are optional for `--news-only`.
 
 `trade_recommendations.py` combines tradebook holdings with current Screener.in prices and RSI, calculates price targets, and emails recommendations. `trade_recommendations.bat` runs this script. The notebook contains older logic; this document describes the Python script.
 
@@ -184,25 +187,34 @@ These tests use temporary fixtures and do not send email or apply pending trades
 
 Install dependencies with `python -m pip install -r requirements.txt`.
 
-Recent company news is fetched using yfinance for every `BUY` or `BUY-MAY-BE`
-company in either portfolio and every company in the Dividend Yield and Value
-Companies Showing Up Trend screens. Duplicate companies are fetched once, with
-all matching groups shown. Yahoo is searched by company name; known portfolio
-or Screener listing identifiers help confirm abbreviated names. Only matching
-Indian NSE (`.NS`) or BSE (`.BO`) results are accepted, preferring NSE. Ambiguous
-matches remain unresolved rather than caching a guess.
+Recent company news is fetched using Google News RSS for every `BUY` or
+`BUY-MAY-BE` company in either portfolio and every company in the Dividend Yield
+and Value Companies Showing Up Trend screens. Duplicate companies are fetched
+once, with all matching groups shown. Company names from `mapping.csv` are used
+when available; new screen companies use their displayed identifier. News does
+not modify the mapping file or require a Yahoo listing or API key.
 
-Confirmed tickers are saved atomically in the `YahooTicker` column of
-`mapping.csv` and reused on future runs. Newly encountered screen companies are
-added while existing symbols and RSI settings are preserved. Clear a company's
-`YahooTicker` cell to force a fresh search after a listing change.
+Searches use quoted company names with configurable terms and English language
+(`hl=en`), without India country or edition parameters. No country restriction
+is added; Google may still apply its own regional ranking. Configure `.env`:
 
-The run log includes dated news links returned by Yahoo from the last seven
-days (up to ten fetched articles per ticker), or a clear unavailable/no-news
-status. Yahoo may return no articles for an Indian listing. News is currently
-written only to the log, which remains a standard email attachment. Separate
-news files and email news sections are not generated. A company's lookup
-failure does not stop other companies.
+```dotenv
+NEWS_SEARCH_TERMS=stock,shares,company
+NEWS_DAYS=14
+```
+
+Terms are comma separated, combined with OR; multiword terms are quoted.
+An empty terms value searches only by company name. `NEWS_DAYS` must be an
+integer between 1 and 365 and defaults to 14. Both the feed query and local
+publication-date filter use this value. The run log includes up to ten headlines per
+company from the configured lookback period (14 days by default), newest first, with publisher, date and Google
+News article link. Duplicate links and headlines are removed. Invalid dates,
+future articles, older articles and headlines missing the first distinctive
+company-name word are excluded. Empty feeds and retrieval
+failures are logged separately; one failed company does not stop the others.
+Search results may include unrelated stories or miss abbreviated company names.
+RSS supplies headlines and links, not full article text. Each request has a
+30-second timeout. News remains in the run log attached to the email.
 
 To retrieve and review news without sending email, importing trades, or
 advancing `rsi_data.csv`, run:
@@ -212,7 +224,7 @@ python trade_recommendations.py --news-only
 ```
 
 This still fetches current Screener data using `cookies.txt`, writes
-`rsi_today.csv`, updates confirmed Yahoo mappings, and replaces the run log.
+`rsi_today.csv` and replaces the run log.
 Run isolated checks with
 `python -m unittest test_company_news.py test_tradebook_update.py`.
 
