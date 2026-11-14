@@ -1,5 +1,45 @@
 # Trade recommendation logic
 
+## NSE UDiFF bhavcopy download
+
+`bhavAnalysis/` is the independent bhavcopy module. It currently downloads and
+validates bhavcopy data; no additional analysis rules are configured.
+Run it directly with `python -m bhavAnalysis` (the options below also apply).
+The existing `python download_bhavcopy.py` command remains available.
+
+Normal and `--news-only` runs automatically launch this module in a separate
+Python process after their existing workflow completes. Normal runs send the
+email and update the RSI cache first. Module errors, import failures, nonzero
+exit codes, and a 120-second timeout are logged without failing the completed
+recommendation/news run. Bhavcopy diagnostics are written to the run log after
+email delivery, so they are not included in that email's log attachment.
+
+Run `python download_bhavcopy.py` to download the latest published NSE cash-market
+**CM-UDiFF Common Bhavcopy Final** ZIP and its CSV into `data/bhavcopy/`.
+Source: https://www.nseindia.com/all-reports.
+This uses the UDiFF file `BhavCopy_NSE_CM_0_0_0_YYYYMMDD_F_0000.csv.zip`,
+not the discontinued legacy bhavcopy format. It does not download derivatives.
+
+The downloader searches backwards from today's date in IST for up to 30 calendar
+days, including weekends to support special trading sessions. Missing files
+(HTTP 404/410) are skipped. Network failures, server errors, and invalid files
+are retried with backoff and a second NSE archive host. Unresolved errors stop
+the run with exit code 1, rather than mislabeling an older file as latest.
+ZIP integrity, UDiFF columns, and every row's trading date are checked before
+atomic file writes. Previously downloaded files are retained on network failure.
+The returned date is the latest *published* date; delayed uploads may mean this
+is earlier than the latest trading session. No download is guaranteed during
+NSE outages or access restrictions.
+
+Options: `--output-dir PATH`, `--lookback 30`, `--attempts 3`, and
+`--as-of YYYY-MM-DD` (search backwards from that date).
+
+For daily operation, configure Windows Task Scheduler to run your Python
+executable with the full path to `download_bhavcopy.py` as its argument, for
+example at 20:00 IST every day. Enable retries on failure. Scheduling on weekends
+also covers special sessions; the machine must be awake and online. No scheduled
+task is installed automatically.
+
 ## Local configuration
 
 Personal holdings, trade imports, Screener session cookies, mapping data, caches,
@@ -180,7 +220,7 @@ reports that the tradebook **was updated**. Manually rename the remaining
 same trades could be applied twice. A subsequent email failure does not undo a
 completed tradebook import.
 
-Run isolated import checks with `python -m unittest test_tradebook_update.py`.
+Run isolated import checks with `python -m unittest tests.test_tradebook_update`.
 These tests use temporary fixtures and do not send email or apply pending trades.
 
 ## Running
@@ -226,7 +266,9 @@ python trade_recommendations.py --news-only
 This still fetches current Screener data using `cookies.txt`, writes
 `rsi_today.csv` and replaces the run log.
 Run isolated checks with
-`python -m unittest test_company_news.py test_tradebook_update.py`.
+`python -m unittest tests.test_company_news tests.test_tradebook_update`.
+All tests live in `tests/`. Run the full suite from the project root with
+`python -m unittest discover -s tests`.
 
 Run from an environment with `beautifulsoup4`, `numpy`, `pandas`, `requests`, and a pandas HTML parser such as `lxml` installed:
 

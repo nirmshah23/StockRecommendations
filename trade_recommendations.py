@@ -4,6 +4,8 @@ import re
 import logging
 import shutil
 import tempfile
+import subprocess
+import sys
 from pathlib import Path
 from decimal import Decimal, InvalidOperation
 from io import StringIO
@@ -303,6 +305,26 @@ def update_tradebook(tradebook_path=TRADEBOOK_FILE, new_trades_path=NEW_TRADES_F
                  sum(t["row"]["Trade Type"] == "sell" for t in trades), len(rows), archive)
 
 
+def run_bhav_analysis(timeout=120):
+    """Keep optional bhavcopy failures and process exits outside the core workflow."""
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "bhavAnalysis"],
+            cwd=Path(__file__).resolve().parent,
+            capture_output=True, text=True, errors="replace", timeout=timeout,
+            check=False,
+        )
+        if result.returncode:
+            logging.error("bhavAnalysis failed (exit %s): %s",
+                          result.returncode, result.stderr or result.stdout)
+            return False
+        logging.info("bhavAnalysis completed: %s", result.stdout + result.stderr)
+        return True
+    except Exception:
+        logging.exception("bhavAnalysis failed; recommendation and news results are preserved.")
+        return False
+
+
 def main(news_only=False):
     load_dotenv(Path(__file__).resolve().with_name(".env"), override=True)
     setup_logging()
@@ -531,6 +553,7 @@ def main(news_only=False):
     if news_only:
         logging.info("News-only run complete: logged news for %d companies.",
                      len(company_news))
+        run_bhav_analysis()
         return
 
     # Create message
@@ -569,6 +592,7 @@ def main(news_only=False):
     # save latest rsi for use after recommendation email is successfully sent
     df_rsi.to_csv(RSI_CACHE_FILE, index=False)
     logging.info("Updated %s.", RSI_CACHE_FILE)
+    run_bhav_analysis()
 
 # %%
 #rsi = pd.merge(prev_rsi_df, df_rsi, on='Name', how='inner')
