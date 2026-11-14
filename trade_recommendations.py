@@ -26,9 +26,13 @@ from company_news import collect_company_news, log_company_news
 # set the working directory to the executable's location
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
-LOG_FILE = "trade_recommendations.log"
-RSI_FILE = "rsi_today.csv"
-RSI_CACHE_FILE = "rsi_data.csv"
+DATA_DIR = Path(__file__).resolve().parent / "data"
+TRADEBOOK_FILE = DATA_DIR / "tradebook.csv"
+NEW_TRADES_FILE = DATA_DIR / "new_trades.csv"
+MAPPING_FILE = DATA_DIR / "mapping.csv"
+LOG_FILE = DATA_DIR / "trade_recommendations.log"
+RSI_FILE = DATA_DIR / "rsi_today.csv"
+RSI_CACHE_FILE = DATA_DIR / "rsi_data.csv"
 RSI_OVERBOUGHT_THRESHOLD = 70
 RSI_OVERSOLD_THRESHOLD = 30
 DIVIDEND_SCREEN_URL = "https://www.screener.in/screens/2043645/dividend-yield-companies/"
@@ -36,6 +40,7 @@ VALUE_SCREEN_URL = "https://www.screener.in/screens/3625642/value-companies-show
 
 
 def setup_logging():
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
@@ -179,7 +184,7 @@ def fetch_screen(session, screen_url, include_symbols=False):
     return pd.concat(frames, ignore_index=True).drop_duplicates()
 
 
-def update_tradebook(tradebook_path="tradebook.csv", new_trades_path="new_trades.csv"):
+def update_tradebook(tradebook_path=TRADEBOOK_FILE, new_trades_path=NEW_TRADES_FILE):
     """Apply new trades to remaining buy lots; archive only after committing."""
     tradebook_path = Path(tradebook_path)
     new_trades_path = Path(new_trades_path)
@@ -322,12 +327,12 @@ def main(news_only=False):
     if not news_only and not all((sender_email, app_password, receiver_email)):
         raise ValueError("Set SMTP_SENDER_EMAIL and SMTP_APP_PASSWORD in .env (SMTP_RECEIVER_EMAIL is optional).")
 
-    if not os.path.exists("tradebook.csv"):
-        raise FileNotFoundError("tradebook.csv not found.")
+    if not TRADEBOOK_FILE.exists():
+        raise FileNotFoundError(f"{TRADEBOOK_FILE} not found.")
 
     if not news_only:
         update_tradebook()
-    my_tb = pd.read_csv("tradebook.csv")
+    my_tb = pd.read_csv(TRADEBOOK_FILE)
     logging.info("Loaded tradebook.csv with %d rows.", len(my_tb))
 
     tb = my_tb[["Symbol", "TradeDate", "Quantity", "Price"]].copy()
@@ -387,9 +392,9 @@ def main(news_only=False):
     prev_rsi_df = prev_rsi_df[required_prev_columns]
     logging.info("Loaded %s with %d rows.", RSI_CACHE_FILE, len(prev_rsi_df))
 
-    cookies_path = "cookies.txt"
+    cookies_path = DATA_DIR / "cookies.txt"
     if not os.path.exists(cookies_path):
-        raise FileNotFoundError("cookies.txt not found.")
+        raise FileNotFoundError(f"{cookies_path} not found.")
 
     cj = MozillaCookieJar(cookies_path)
     cj.load(ignore_discard=True, ignore_expires=True)
@@ -425,10 +430,10 @@ def main(news_only=False):
     if table is None:
         raise ValueError("RSI table not found on watchlist page.")
 
-    if not os.path.exists("mapping.csv"):
-        raise FileNotFoundError("mapping.csv not found.")
+    if not MAPPING_FILE.exists():
+        raise FileNotFoundError(f"{MAPPING_FILE} not found.")
 
-    mapping = pd.read_csv("mapping.csv")
+    mapping = pd.read_csv(MAPPING_FILE)
     for rsi_column in ["BuyRSI", "SellRSI"]:
         if rsi_column not in mapping.columns:
             mapping[rsi_column] = np.nan
@@ -521,7 +526,7 @@ def main(news_only=False):
         ("Dividend Yield Companies", dividend_companies),
         ("Value Companies Showing Up Trend", value_companies),
     ]
-    company_news = collect_company_news(news_groups)
+    company_news = collect_company_news(news_groups, mapping_path=MAPPING_FILE)
     log_company_news(company_news)
     if news_only:
         logging.info("News-only run complete: logged news for %d companies.",

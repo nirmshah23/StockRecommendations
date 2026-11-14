@@ -34,3 +34,7 @@ rsi_*.csv
 company_news.json
 company_news.html
 *.tmp
+
+# Local data directory
+/data/*
+!/data/.gitkeep

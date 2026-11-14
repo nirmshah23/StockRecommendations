@@ -3,9 +3,9 @@
 ## Local configuration
 
 Personal holdings, trade imports, Screener session cookies, mapping data, caches,
-and generated reports are excluded from Git. Supply your own `tradebook.csv`,
+and generated reports are stored in `data/` and excluded from Git. Supply your own `tradebook.csv`,
 `mapping.csv`, `rsi_data.csv`, and Netscape-format `cookies.txt` using the input
-columns documented below. The RSI cache must contain data from a previous run.
+columns documented below, placing these files in `data/`. The RSI cache must contain data from a previous run.
 
 Before sending email, copy `.env.example` to `.env` beside
 `trade_recommendations.py` and fill in your settings once:
@@ -151,7 +151,7 @@ The portfolio tables include identifiers, average cost, targets, current price, 
 
 ## Importing new trades
 
-Before reading holdings for calculations, the script checks for `new_trades.csv`.
+Before reading holdings for calculations, the script checks for `data/new_trades.csv`.
 If absent, it continues normally. Lowercase broker export headers such as
 `symbol`, `trade_date`, and `trade_type` are mapped to the existing tradebook
 columns. Identifiers are read as strings. Imports must contain new trades only;
@@ -234,4 +234,4 @@ Run from an environment with `beautifulsoup4`, `numpy`, `pandas`, `requests`, an
 python trade_recommendations.py
 ```
 
-The script reads files relative to its own directory. Running it sends the email using the configured SMTP settings and updates the cache after successful delivery. Check `trade_recommendations.log` for errors and unresolved company mappings.
+The script reads and writes all inputs, caches, trade archives, reports, and logs in `data/` relative to its own directory. It creates this directory when needed. Keep `.env` beside the script. All data filenames above refer to files inside `data/`. Running it sends the email using the configured SMTP settings and updates the cache after successful delivery. Check `trade_recommendations.log` for errors and unresolved company mappings.

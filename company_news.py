@@ -2,6 +2,7 @@
 import logging
 import os
 import re
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlencode
@@ -71,7 +72,7 @@ def fetch_news(name, days, count):
     return articles[:count]
 
 
-def collect_company_news(groups, mapping_path="mapping.csv", days=None, count=10):
+def collect_company_news(groups, mapping_path=Path(__file__).resolve().parent / "data" / "mapping.csv", days=None, count=10):
     """Groups contain (label, frame); portfolio frames must already be filtered."""
     days = news_days() if days is None else days
     mapping = pd.read_csv(mapping_path, dtype=str, keep_default_na=False)
