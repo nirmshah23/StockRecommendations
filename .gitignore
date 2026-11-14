@@ -1,0 +1,36 @@
+# Python environments and generated files
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Credentials and local settings
+.env
+.env.*
+!.env.example
+cookies*.txt
+*.pem
+*.key
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# Personal holdings, trade imports, and runtime data
+tradebook*.csv
+new_trades*.csv
+mapping.csv
+rsi_*.csv
+*.log
+company_news.json
+company_news.html
+*.tmp
