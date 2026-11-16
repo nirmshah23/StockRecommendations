@@ -1,32 +1,26 @@
-import io
 import tempfile
 import unittest
-import zipfile
 from datetime import date
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 import requests
 
-from bhavAnalysis.download_bhavcopy import BhavcopyError, download_latest, fetch_day, validate_zip
+from bhavAnalysis.download_bhavcopy import BhavcopyError, download_latest, fetch_day, parse_csv
 
 
 def archive(day, csv_day=None):
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w") as handle:
-        handle.writestr(
-            f"BhavCopy_NSE_CM_0_0_0_{day:%Y%m%d}_F_0000.csv",
-            f"TradDt,TckrSymb,ClsPric\n{csv_day or day.isoformat()},TEST,100\n",
-        )
-    return buffer.getvalue()
+    return ("SYMBOL, SERIES, DATE1, CLOSE_PRICE, DELIV_PER, PREV_CLOSE, DELIV_QTY\n"
+            f"TEST, EQ, {csv_day or day.strftime('%d-%b-%Y')}, 100, 40, 100, 1000\n").encode()
 
 
 class BhavcopyTests(unittest.TestCase):
-    def test_rejects_wrong_date_and_html(self):
+    def test_skips_wrong_date_and_rejects_html(self):
         day = date(2026, 11, 13)
-        for content in (archive(day, "2026-11-12"), b"<html>Access denied</html>"):
-            with self.assertRaises(BhavcopyError):
-                validate_zip(content, day)
+        with self.assertLogs(level="WARNING"):
+            self.assertEqual(parse_csv(archive(day, "12-Nov-2026"), day), [])
+        with self.assertRaises(BhavcopyError):
+            parse_csv(b"<html>Access denied</html>", day)
 
     def test_fallback_host(self):
         day = date(2026, 11, 13)
@@ -50,7 +44,7 @@ class BhavcopyTests(unittest.TestCase):
             self.assertEqual(day, friday)
             self.assertEqual(fetch.call_count, 3)
             self.assertTrue(path.exists())
-            validate_zip(Path(str(path) + ".zip").read_bytes(), friday)
+            self.assertEqual(len(parse_csv(path.read_bytes(), friday)), 1)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""Download the newest available NSE cash-market UDiFF final bhavcopy."""
+"""Download the newest available NSE combined security/delivery bhavcopy."""
 
 import argparse
 import csv
@@ -7,7 +7,6 @@ import logging
 import os
 import tempfile
 import time
-import zipfile
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -22,29 +21,40 @@ class BhavcopyError(RuntimeError):
     """A download could not be verified."""
 
 
-def validate_zip(content, day):
-    """Check CRC, schema and every row's trading date before saving anything."""
-    expected = f"BhavCopy_NSE_CM_0_0_0_{day:%Y%m%d}_F_0000.csv"
+def parse_csv(content, day):
+    """Validate structure; return only rows matching the filename's date."""
     try:
-        with zipfile.ZipFile(io.BytesIO(content)) as archive:
-            if archive.namelist() != [expected]:
-                raise BhavcopyError("Unexpected archive contents")
-            if archive.getinfo(expected).file_size > 100_000_000:
-                raise BhavcopyError("CSV exceeds size limit")
-            raw = archive.read(expected)  # Also verifies CRC.
-        rows = csv.DictReader(io.StringIO(raw.decode("utf-8-sig")))
-        required = {"TradDt", "TckrSymb", "ClsPric"}
+        rows = csv.DictReader(io.StringIO(content.decode("utf-8-sig")), skipinitialspace=True, strict=True)
+        if rows.fieldnames:
+            rows.fieldnames = [name.strip() for name in rows.fieldnames]
+        required = {"SYMBOL", "SERIES", "DATE1", "CLOSE_PRICE", "PREV_CLOSE", "DELIV_PER", "DELIV_QTY"}
         if not required.issubset(rows.fieldnames or []):
-            raise BhavcopyError("Missing UDiFF columns")
-        count = 0
+            raise BhavcopyError("Missing SEC columns")
+        count, skipped = 0, 0
+        valid, seen = [], set()
         for row in rows:
-            if row["TradDt"] != day.isoformat():
-                raise BhavcopyError("CSV trading date does not match requested date")
             count += 1
+            if None in row or any(value is None for value in row.values()):
+                raise BhavcopyError("Malformed SEC row")
+            row = {key: value.strip() for key, value in row.items()}
+            try:
+                row_day = datetime.strptime(row["DATE1"], "%d-%b-%Y").date()
+            except ValueError:
+                row_day = None
+            if row_day != day:
+                skipped += 1
+                continue
+            key = row["SYMBOL"], row["SERIES"]
+            if not all(key) or key in seen:
+                raise BhavcopyError(f"Empty or duplicate security: {key}")
+            seen.add(key)
+            valid.append(row)
         if not count:
             raise BhavcopyError("Empty bhavcopy")
-        return expected, raw
-    except (zipfile.BadZipFile, UnicodeError, csv.Error, KeyError) as exc:
+        if skipped:
+            LOG.warning("%s: skipped %d rows with mismatched/invalid dates", day, skipped)
+        return valid
+    except (UnicodeError, csv.Error, KeyError) as exc:
         raise BhavcopyError(f"Invalid bhavcopy: {exc}") from exc
 
 
@@ -63,17 +73,17 @@ def atomic_write(path, content):
 
 def fetch_day(session, day, attempts=3):
     """Return None only for confirmed missing files; outages remain errors."""
-    filename = f"BhavCopy_NSE_CM_0_0_0_{day:%Y%m%d}_F_0000.csv.zip"
+    filename = f"sec_bhavdata_full_{day:%d%m%Y}.csv"
     errors = []
     for host in HOSTS:
-        url = f"{host}/content/cm/{filename}"
+        url = f"{host}/products/content/{filename}"
         for attempt in range(attempts):
             try:
                 response = session.get(url, timeout=(10, 30))
                 if response.status_code in (404, 410):
                     break
                 response.raise_for_status()
-                validate_zip(response.content, day)
+                parse_csv(response.content, day)
                 return response.content
             except (requests.RequestException, BhavcopyError) as exc:
                 if attempt + 1 == attempts:
@@ -94,7 +104,7 @@ def download_latest(output_dir, as_of=None, lookback=30, attempts=3):
     with requests.Session() as session:
         session.headers.update({
             "User-Agent": "Mozilla/5.0",
-            "Accept": "application/zip,application/octet-stream,*/*",
+            "Accept": "text/csv,application/octet-stream,*/*",
             "Referer": "https://www.nseindia.com/all-reports",
         })
         for offset in range(lookback):
@@ -104,15 +114,18 @@ def download_latest(output_dir, as_of=None, lookback=30, attempts=3):
             content = fetch_day(session, day, attempts)
             if content is None:
                 continue
-            filename, raw = validate_zip(content, day)
-            atomic_write(output_dir / (filename + ".zip"), content)
-            path = output_dir / filename
-            atomic_write(path, raw)
+            parse_csv(content, day)
+            path = output_dir / f"sec_bhavdata_full_{day:%d%m%Y}.csv"
+            atomic_write(path, content)
             return day, path
     raise BhavcopyError(f"No published bhavcopy found in {lookback} calendar days ending {as_of}")
 
 
 def main():
+    from dotenv import load_dotenv
+    from .analysis import configuration, generate_reports
+
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, default=Path(__file__).resolve().parent.parent / "data" / "bhavcopy")
     parser.add_argument("--as-of", type=date.fromisoformat, help="Search backwards from YYYY-MM-DD (default: today in IST)")
@@ -121,9 +134,11 @@ def main():
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
+        readings, rebuild, price_threshold, delivery_threshold, quantity_threshold, days = configuration()
         day, path = download_latest(args.output_dir, args.as_of, args.lookback, args.attempts)
+        generate_reports(args.output_dir, day, readings, rebuild, price_threshold, delivery_threshold, days, quantity_threshold=quantity_threshold)
     except (BhavcopyError, OSError, ValueError) as exc:
-        LOG.error("Download failed: %s", exc)
+        LOG.error("bhavAnalysis failed: %s", exc)
         return 1
     LOG.info("Latest available trading date: %s; CSV: %s", day, path)
     return 0

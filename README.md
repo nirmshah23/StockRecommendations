@@ -1,44 +1,122 @@
 # Trade recommendation logic
 
-## NSE UDiFF bhavcopy download
+## SEC bhavcopy analysis
 
-`bhavAnalysis/` is the independent bhavcopy module. It currently downloads and
-validates bhavcopy data; no additional analysis rules are configured.
-Run it directly with `python -m bhavAnalysis` (the options below also apply).
-The existing `python download_bhavcopy.py` command remains available.
+Run `python -m bhavAnalysis` from the project root to download the latest published
+NSE `sec_bhavdata_full_DDMMYYYY.csv` and generate reports in `data/bhavcopy/`.
+Source: https://www.nseindia.com/all-reports (Full Bhavcopy and Security Deliverable data).
+The module uses `PREV_CLOSE`, `CLOSE_PRICE`, `DELIV_PER`, and `DELIV_QTY` from this combined file, not UDiFF.
+The old root `download_bhavcopy.py` entry point has been removed.
 
-Normal and `--news-only` runs automatically launch this module in a separate
-Python process after their existing workflow completes. Normal runs send the
-email and update the RSI cache first. Module errors, import failures, nonzero
-exit codes, and a 120-second timeout are logged without failing the completed
-recommendation/news run. Bhavcopy diagnostics are written to the run log after
-email delivery, so they are not included in that email's log attachment.
+Normal and `--news-only` recommendation runs automatically launch this module in
+a separate Python process after their existing workflow completes. Normal runs
+send email and update the RSI cache first. Module failures and a 120-second timeout
+are logged without failing the completed recommendation/news workflow. Diagnostics
+written after email delivery are not included in that email's log attachment.
 
-Run `python download_bhavcopy.py` to download the latest published NSE cash-market
-**CM-UDiFF Common Bhavcopy Final** ZIP and its CSV into `data/bhavcopy/`.
-Source: https://www.nseindia.com/all-reports.
-This uses the UDiFF file `BhavCopy_NSE_CM_0_0_0_YYYYMMDD_F_0000.csv.zip`,
-not the discontinued legacy bhavcopy format. It does not download derivatives.
+Configure `.env` beside `trade_recommendations.py`:
 
-The downloader searches backwards from today's date in IST for up to 30 calendar
-days, including weekends to support special trading sessions. Missing files
-(HTTP 404/410) are skipped. Network failures, server errors, and invalid files
-are retried with backoff and a second NSE archive host. Unresolved errors stop
-the run with exit code 1, rather than mislabeling an older file as latest.
-ZIP integrity, UDiFF columns, and every row's trading date are checked before
-atomic file writes. Previously downloaded files are retained on network failure.
-The returned date is the latest *published* date; delayed uploads may mean this
-is earlier than the latest trading session. No download is guaranteed during
-NSE outages or access restrictions.
+```dotenv
+BHAV_SMA_READINGS=10
+BHAV_RECALCULATE_HISTORY=false
+BHAV_PRICE_CHANGE_THRESHOLD=0
+BHAV_DELIVERY_GROWTH_THRESHOLD=1
+BHAV_DELIVERY_QUANTITY_THRESHOLD=1
+BHAV_ACCUMULATION_DAYS=3
+```
+
+The shared SMA window must be a positive integer. Every average excludes the current
+observation and uses up to that many prior valid observations, with partial windows
+when necessary. The first observation has no SMA or dependent ratios. Securities are identified by
+symbol and series. Rows with `-` delivery values, invalid numeric values, or a date
+that differs from the filename are skipped from metrics and their SMA inputs.
+Invalid/duplicate files are logged and excluded from historical inputs; a malformed
+new download fails the module. A zero delivery SMA leaves its ratio and interpretation
+unavailable. Prices are unadjusted for corporate actions.
+
+`PriceChangePct = ((CLOSE_PRICE - PREV_CLOSE) / PREV_CLOSE) * 100` and
+`DeliveryGrowth = DELIV_PER / SMA(prior DELIV_PER)`, and
+`DeliveryQuantity = DELIV_QTY / SMA(prior DELIV_QTY)`. Price change uses the exchange-provided
+previous close, even when no earlier file is saved. Invalid or nonpositive previous
+closes leave price change and interpretation unavailable, with diagnostics; otherwise
+valid observations still contribute to the SMAs.
+
+Classifications use unrounded values and independent thresholds:
+`BHAV_PRICE_CHANGE_THRESHOLD` (default `0`, in percentage points),
+`BHAV_DELIVERY_GROWTH_THRESHOLD` (default `1`), and
+`BHAV_DELIVERY_QUANTITY_THRESHOLD` (default `1`).
+
+| Conditions relative to each metric's threshold | Interpretation |
+| --- | --- |
+| All three metrics strictly above | Accumulation |
+| All three metrics below or equal | Distribution |
+| Any mixed combination | Speculative Trading |
+
+Missing metrics leave interpretation unavailable and produce diagnostics.
+Delivery quantity must be finite and nonnegative. Invalid quantity values are excluded
+from its independent window; otherwise valid price/delivery-percentage observations
+still contribute to their windows. A zero prior quantity average leaves the ratio
+unavailable. History records raw quantity as `DeliveryQuantityValue`, its average as
+`DeliveryQuantitySMA`, and the ratio as `DeliveryQuantity`.
+`ReadingCount` counts prior price/delivery-percentage observations;
+`DeliveryQuantityReadingCount` counts prior valid quantity observations.
+
+Default incremental runs calculate only the downloaded date, replacing its stored
+results (including removing previously calculated rows now excluded). Saved SEC
+files supply earlier SMA observations, but earlier interpretations are not calculated
+automatically. Set `BHAV_RECALCULATE_HISTORY=true` to recalculate only the latest `BHAV_SMA_READINGS` saved trading-day files;
+set it back to `false` for daily operation. Older files still supply SMA inputs,
+but their stored metrics are preserved. If fewer files exist, recalculate all available files.
+Recalculate after changing the SMA window
+or correcting a source when you want results within that latest-N range refreshed. Each
+stored result records the window used; incremental runs preserve earlier settings.
+No additional historical sessions are downloaded automatically.
+
+The price change threshold accepts any finite number, including zero and negative
+values. Both delivery thresholds must be finite and positive.
+`BHAV_ACCUMULATION_DAYS` must be a positive integer (default `3`). For example,
+price threshold `2`, delivery threshold `1.2`, and days `5` require price change > 2%
+and DeliveryGrowth > 1.2 and DeliveryQuantity > 1 (its default threshold) on each of the latest five saved trading dates.
+Replace `BHAV_PRICE_GROWTH_THRESHOLD` with `BHAV_PRICE_CHANGE_THRESHOLD`; the old
+price-growth and former `BHAV_RATIO_THRESHOLD` settings are no longer used.
+Threshold changes reclassify cached metrics without recomputing their SMAs.
+Recalculation is not needed for threshold/day changes. CSV report date columns
+expand to the configured number of days; reports include all three thresholds and days.
+
+On first reading either older history schema (PriceGrowth or the two-metric
+PriceChangePct schema), the latest `BHAV_SMA_READINGS` saved dates are automatically
+recalculated using prior-only averages and all three metrics. This also happens in
+incremental mode. Older rows retain their cached values but lose their interpretations;
+new quantity fields remain unavailable until those dates are recalculated. This prevents
+old classifications from qualifying for reports. Later runs follow normal incremental
+or bounded-recalculation behavior. Unknown history schemas remain errors.
+Source files require `PREV_CLOSE` and `DELIV_QTY` columns. Reports include
+`DeliveryQuantity1`, etc., and `DeliveryQuantityThreshold` alongside existing metrics.
+
+Outputs:
+
+- `analysis_history.csv`: date, symbol/series, source values, averages, reading count,
+  price change percentage, delivery percentage/quantity ratios, interpretation, and configured window.
+- `accumulation_report.csv` and `accumulation_report.html`: securities whose stored
+  interpretations are Accumulation on the latest `BHAV_ACCUMULATION_DAYS` saved trading dates through
+  the downloaded date, with dates, price changes, delivery percentage/quantity ratios, interpretations, and windows used.
+
+The required consecutive dates come from filenames: a missing/excluded observation breaks the
+streak. A first incremental run has only one calculated date; enable history recalculation
+or accumulate the configured number of calculated dates before expecting matches. Empty reports are
+still generated. HTML includes data exclusion diagnostics. Outputs use atomic
+file replacement after calculation; failed downloads/calculations retain previous
+reports. Every successful fresh download overwrites the existing same-date source.
+
+The downloader searches backwards from today in IST for up to 30 calendar days,
+including weekends for special sessions. HTTP 404/410 means missing; other errors
+are retried with backoff and a second archive host, and unresolved errors stop the
+module rather than presenting an older file as latest. Availability is subject to
+NSE publication delays, outages, and access restrictions.
 
 Options: `--output-dir PATH`, `--lookback 30`, `--attempts 3`, and
-`--as-of YYYY-MM-DD` (search backwards from that date).
-
-For daily operation, configure Windows Task Scheduler to run your Python
-executable with the full path to `download_bhavcopy.py` as its argument, for
-example at 20:00 IST every day. Enable retries on failure. Scheduling on weekends
-also covers special sessions; the machine must be awake and online. No scheduled
-task is installed automatically.
+`--as-of YYYY-MM-DD`. For Task Scheduler, use Python arguments `-m bhavAnalysis`
+and set the working directory to the project root. No scheduled task is installed.
 
 ## Local configuration
 
